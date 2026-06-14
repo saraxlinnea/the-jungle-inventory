@@ -1,4 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBcLeU9bCf4YcBE72eq1S4SdewUYWIog4E",
+  authDomain: "the-jungle-inventory.firebaseapp.com",
+  projectId: "the-jungle-inventory",
+  storageBucket: "the-jungle-inventory.firebasestorage.app",
+  messagingSenderId: "17587931596",
+  appId: "1:17587931596:web:be3f5c63e5c988418bf569"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
 
 const EDIT_PASSWORD = "dracarys";
 
@@ -200,6 +214,7 @@ export default function App() {
   const [pwError, setPwError] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const [plants, setPlants] = useState(PLANTS);
+  const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("indoor");
   const [openId, setOpenId] = useState(null);
   const [editingNote, setEditingNote] = useState(null);
@@ -210,7 +225,33 @@ export default function App() {
   const [wishOpenId, setWishOpenId] = useState(null);
   const [addingWish, setAddingWish] = useState(false);
   const [newWish, setNewWish] = useState({ nickname: "", commonName: "", scientific: "", emoji: "🌱", blurb: "", notes: "" });
+  const [editingPlant, setEditingPlant] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
+// Load from Firebase on mount and listen for changes
+useEffect(() => {
+  const unsubPlants = onSnapshot(doc(db, "data", "plants"), (snap) => {
+    if (snap.exists()) setPlants(snap.data());
+    setLoaded(true);
+  });
+  const unsubWishlist = onSnapshot(doc(db, "data", "wishlist"), (snap) => {
+    if (snap.exists()) setWishlist(snap.data().list);
+  });
+  return () => { unsubPlants(); unsubWishlist(); };
+}, []);
+
+// Save plants to Firebase whenever they change
+useEffect(() => {
+  if (!loaded) return;
+  setDoc(doc(db, "data", "plants"), plants);
+}, [plants, loaded]);
+
+// Save wishlist to Firebase whenever it changes
+useEffect(() => {
+  if (!loaded) return;
+  setDoc(doc(db, "data", "wishlist"), { list: wishlist });
+}, [wishlist, loaded]);
+  
   const attemptEdit = (action) => {
     if (canEdit) { action(); return; }
     setPendingAction(() => action);
@@ -253,6 +294,31 @@ export default function App() {
     setOpenId(null);
   };
 
+  const startEdit = (plant, isWish = false) => {
+    setEditingPlant({ id: plant.id, isWish });
+    setEditForm({
+      nickname: plant.nickname,
+      commonName: plant.commonName,
+      scientific: plant.scientific,
+      emoji: plant.emoji,
+      blurb: plant.blurb || "",
+    });
+  };
+
+  const saveEdit = () => {
+    if (!editForm.nickname.trim()) return;
+    if (editingPlant.isWish) {
+      setWishlist(prev => prev.map(p => p.id === editingPlant.id ? { ...p, ...editForm } : p));
+    } else {
+      setPlants(prev => ({
+        ...prev,
+        [tab]: prev[tab].map(p => p.id === editingPlant.id ? { ...p, ...editForm } : p)
+      }));
+    }
+    setEditingPlant(null);
+    setEditForm({});
+  };
+
   const addPlant = () => {
     if (!newPlant.nickname.trim()) return;
     setPlants(prev => ({
@@ -262,8 +328,13 @@ export default function App() {
     setNewPlant({ nickname: "", commonName: "", scientific: "", emoji: "🌿", blurb: "", notes: "" });
     setAdding(false);
   };
-
   const current = plants[tab];
+
+  if (!loaded) return (
+    <div style={{ minHeight: "100vh", background: "#f7f3ec", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Georgia, serif", color: "#9a8a72", fontSize: "14px", fontStyle: "italic" }}>
+      loading the inventory...
+    </div>
+  );
 
   return (
     <div style={s.page}>
@@ -380,6 +451,25 @@ export default function App() {
               {/* Expanded body */}
               {isOpen && (
                 <div style={s.body}>
+
+                  {/* Inline edit form */}
+                  {canEdit && editingPlant?.id === plant.id && !editingPlant.isWish ? (
+                    <div style={s.editFormWrap}>
+                      <p style={s.editFormLabel}>Editing {plant.nickname}</p>
+                      <div style={s.addTopRow}>
+                        <input style={{ ...s.input, width: "52px", textAlign: "center", flexShrink: 0, padding: "10px 6px" }} value={editForm.emoji} onChange={e => setEditForm(f => ({ ...f, emoji: e.target.value }))} />
+                        <input style={{ ...s.input, flex: 1 }} value={editForm.nickname} onChange={e => setEditForm(f => ({ ...f, nickname: e.target.value }))} placeholder="Nickname" />
+                      </div>
+                      <input style={s.input} value={editForm.commonName} onChange={e => setEditForm(f => ({ ...f, commonName: e.target.value }))} placeholder="Common name" />
+                      <input style={s.input} value={editForm.scientific} onChange={e => setEditForm(f => ({ ...f, scientific: e.target.value }))} placeholder="Scientific name" />
+                      <textarea style={s.textarea} value={editForm.blurb} rows={3} onChange={e => setEditForm(f => ({ ...f, blurb: e.target.value }))} placeholder="About this plant..." />
+                      <div style={s.miniRow}>
+                        <button style={s.saveBtn} onClick={saveEdit}>Save changes</button>
+                        <button style={s.ghostBtn} onClick={() => setEditingPlant(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
                   {plant.blurb && (
                     <p style={s.blurb}>{plant.blurb}</p>
                   )}
@@ -439,9 +529,16 @@ export default function App() {
                   )}
 
                   {canEdit && (
-                    <button style={s.deleteBtn} onClick={() => deletePlant(plant.id)}>
-                      Remove from inventory
-                    </button>
+                    <div style={s.cardActions}>
+                      <button style={s.editPlantBtn} onClick={() => startEdit(plant)}>
+                        Edit plant details
+                      </button>
+                      <button style={s.deleteBtn} onClick={() => deletePlant(plant.id)}>
+                        Remove from inventory
+                      </button>
+                    </div>
+                  )}
+                    </>
                   )}
                 </div>
               )}
@@ -526,6 +623,25 @@ export default function App() {
 
                 {isOpen && (
                   <div style={s.body}>
+
+                    {/* Inline edit form for wishlist */}
+                    {canEdit && editingPlant?.id === plant.id && editingPlant.isWish ? (
+                      <div style={s.editFormWrap}>
+                        <p style={s.editFormLabel}>Editing {plant.nickname}</p>
+                        <div style={s.addTopRow}>
+                          <input style={{ ...s.input, width: "52px", textAlign: "center", flexShrink: 0, padding: "10px 6px" }} value={editForm.emoji} onChange={e => setEditForm(f => ({ ...f, emoji: e.target.value }))} />
+                          <input style={{ ...s.input, flex: 1 }} value={editForm.nickname} onChange={e => setEditForm(f => ({ ...f, nickname: e.target.value }))} placeholder="Nickname" />
+                        </div>
+                        <input style={s.input} value={editForm.commonName} onChange={e => setEditForm(f => ({ ...f, commonName: e.target.value }))} placeholder="Common name" />
+                        <input style={s.input} value={editForm.scientific} onChange={e => setEditForm(f => ({ ...f, scientific: e.target.value }))} placeholder="Scientific name" />
+                        <textarea style={s.textarea} value={editForm.blurb} rows={3} onChange={e => setEditForm(f => ({ ...f, blurb: e.target.value }))} placeholder="About this plant..." />
+                        <div style={s.miniRow}>
+                          <button style={s.saveBtn} onClick={saveEdit}>Save changes</button>
+                          <button style={s.ghostBtn} onClick={() => setEditingPlant(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
                     {plant.blurb && <p style={s.blurb}>{plant.blurb}</p>}
                     <div
                       style={s.noteRow}
@@ -557,36 +673,43 @@ export default function App() {
                       </div>
                     )}
                     {canEdit && (
-                      <div style={{ display: "flex", gap: "8px" }}>
-                        <button
-                          style={{ ...s.saveBtn, fontSize: "11px", padding: "8px 14px" }}
-                          onClick={() => attemptEdit(() => {
-                            setPlants(prev => ({ ...prev, indoor: [...prev.indoor, { ...plant, lastWatered: null, lastFertilized: null }] }));
-                            setWishlist(prev => prev.filter(p => p.id !== plant.id));
-                            setWishOpenId(null);
-                            setTab("indoor");
-                          })}
-                        >
-                          Move to indoor
+                      <div style={s.cardActions}>
+                        <button style={s.editPlantBtn} onClick={() => startEdit(plant, true)}>
+                          Edit plant details
                         </button>
-                        <button
-                          style={{ ...s.ghostBtn, fontSize: "11px", padding: "8px 14px" }}
-                          onClick={() => attemptEdit(() => {
-                            setPlants(prev => ({ ...prev, outdoor: [...prev.outdoor, { ...plant, lastWatered: null, lastFertilized: null }] }));
-                            setWishlist(prev => prev.filter(p => p.id !== plant.id));
-                            setWishOpenId(null);
-                            setTab("outdoor");
-                          })}
-                        >
-                          Move to outdoor
-                        </button>
-                        <button style={s.deleteBtn} onClick={() => attemptEdit(() => {
-                          if (window.confirm("Remove from wishlist?")) {
-                            setWishlist(prev => prev.filter(p => p.id !== plant.id));
-                            setWishOpenId(null);
-                          }
-                        })}>Remove</button>
+                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                          <button
+                            style={{ ...s.saveBtn, fontSize: "11px", padding: "8px 14px" }}
+                            onClick={() => attemptEdit(() => {
+                              setPlants(prev => ({ ...prev, indoor: [...prev.indoor, { ...plant, lastWatered: null, lastFertilized: null }] }));
+                              setWishlist(prev => prev.filter(p => p.id !== plant.id));
+                              setWishOpenId(null);
+                              setTab("indoor");
+                            })}
+                          >
+                            Move to indoor
+                          </button>
+                          <button
+                            style={{ ...s.ghostBtn, fontSize: "11px", padding: "8px 14px" }}
+                            onClick={() => attemptEdit(() => {
+                              setPlants(prev => ({ ...prev, outdoor: [...prev.outdoor, { ...plant, lastWatered: null, lastFertilized: null }] }));
+                              setWishlist(prev => prev.filter(p => p.id !== plant.id));
+                              setWishOpenId(null);
+                              setTab("outdoor");
+                            })}
+                          >
+                            Move to outdoor
+                          </button>
+                          <button style={s.deleteBtn} onClick={() => attemptEdit(() => {
+                            if (window.confirm("Remove from wishlist?")) {
+                              setWishlist(prev => prev.filter(p => p.id !== plant.id));
+                              setWishOpenId(null);
+                            }
+                          })}>Remove</button>
+                        </div>
                       </div>
+                    )}
+                      </>
                     )}
                   </div>
                 )}
@@ -958,6 +1081,26 @@ const s = {
     fontSize: "13px", color: "#9a8a72",
   },
   noteEditWrap: { marginBottom: "12px" },
+  editFormWrap: {
+    padding: "4px 0 8px",
+  },
+  editFormLabel: {
+    fontFamily: FONT_DISPLAY,
+    fontSize: "14px", color: "#4a3e2e",
+    fontStyle: "italic", marginBottom: "14px",
+  },
+  cardActions: {
+    display: "flex", flexDirection: "column", gap: "10px",
+    marginTop: "4px",
+  },
+  editPlantBtn: {
+    background: "none", border: "none",
+    color: "#4a6741", fontSize: "12px",
+    cursor: "pointer", fontFamily: FONT_BODY,
+    fontStyle: "italic", padding: "4px 0",
+    letterSpacing: "0.05em", textTransform: "uppercase",
+    textAlign: "left",
+  },
   deleteBtn: {
     background: "none", border: "none",
     color: "#9c3d2e", fontSize: "11px",
